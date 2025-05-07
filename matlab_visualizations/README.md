@@ -16,17 +16,9 @@ choice = 1;  % 1 for density simulation, 2 for temperature equilibrium
 ```
 ## 2. **density\_simulation.m**
 
-A simple particle-based animation where sand grains settle in water of varying densities.
-
-* **Settling speed**: Based on a simplified Stokes’ Law.
-* **Color coding**: Particles are colored by water density (blue, green, and red).
-* **Constraint**: Rather than clearing the screen for each frame, the previous particle positions are overwritten with **white dots**—a deliberate design choice to avoid different animation methods.
+A plain particle-based animation built on a simplified Stokes’ Law where sand grains settle in water of varying densities. Particles are colored by water density (blue, green, and red). Rather than clearing the screen for each frame, the previous particle positions are overwritten with **white dots**—a deliberate design choice to avoid different animation methods.
 
 ## 3. **temperature\_equilibrium.m**
 
-Analyzes how the mass of water affects its final temperature when placed in a steel container.
-
-* **Comparison**: Experimental data is compared to theoretical predictions and a **nonlinear fit**.
-* **Focus**: Highlights equilibrium behavior and demonstrates basic **curve fitting** techniques.
-
+Analyzes how the mass of water affects its final temperature when placed in a steel container. Experimental data is compared to theoretical predictions and a **nonlinear fit**.
 
