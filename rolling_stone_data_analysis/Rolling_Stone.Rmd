@@ -1,0 +1,778 @@
+---
+title: "Rolling Stone Data Analysis"
+author: "Julia Czekańska"
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+## Installing libraries
+
+```{r}
+# Define the required libraries
+libs <- c("tidyverse", "ggtext", "patchwork", "cowplot", "gridExtra", "lubridate", "ggthemes", "tm", "SnowballC", "wordcloud", "RColorBrewer", "RCurl", "XML", "tidytext", "viridis", "pals", "dplyr","ggplot2", "tidyr", "stringr", "gganimate", "ggraph", "tidygraph")
+
+# Check if libraries are installed and install missing ones
+installed_libs <- libs %in% rownames(installed.packages())
+
+if (any(installed_libs == FALSE)) {
+    install.packages(libs[!installed_libs])
+} else{
+  print("All the libraries are already installed")
+}
+
+# Load all the needed libraries
+for (lib in libs) {
+  library(lib, character.only = TRUE)
+}
+```
+
+## Loading the dataset
+
+The dataset's string values were converted using `str_to_title` due to the case-sensitivity of the queries.
+
+```{r}
+df <- read.csv("rolling_stone.csv", stringsAsFactors = FALSE)
+string_columns <- c("sort_name", "clean_name", "album", "genre", "type", "spotify_url", "artist_gender")
+
+df[string_columns] <- df[string_columns] %>% lapply(str_to_title)
+
+head(df)
+```
+
+## EDA
+
+### Gender Distribution among Artists
+
+Artists were divided into groups and soloists and then amount of male, female, or mixed gender was counted.
+The data shows that male artists dominate the rankings and tend to be in bands more often than female artists.
+
+```{r}
+gender_distribution <- df %>% 
+  mutate(artist_type = ifelse(artist_member_count == 1, "Solo", "Group")) %>%
+  count(artist_type, artist_gender) %>%
+  filter(!is.na(artist_type)) %>% 
+  spread(artist_type, n, fill = 0)
+gender_distribution
+```
+
+### Artist Member Count vs Debut Album Release Year
+
+The debut years of artists were grouped by decade, and the average number of band members per decade was calculated.
+The results highlight the rise of bands in the '60s-'80s.
+
+```{r}
+member_vs_debut <- df %>% 
+  mutate(debut_decade = floor(debut_album_release_year / 10) * 10) %>%
+  group_by(debut_decade) %>%
+  summarise(avg_member_count = round(mean(artist_member_count, na.rm = TRUE), 2)) %>% 
+  filter(!is.na(debut_decade))
+member_vs_debut
+```
+
+### Albums with More Than Eight Words in the Title
+
+Album names with more than 8 words were selected, which resulted in displaying 13 names.
+
+```{r}
+long_album_titles <- df %>% 
+  mutate(word_count = str_count(album, " ") + 1, avg_rank = round(rowMeans(select(., rank_2003, rank_2012, rank_2020), na.rm = TRUE), 2)) %>% 
+  filter(word_count > 8) %>% 
+  select(album, clean_name, avg_rank) %>% 
+  arrange(avg_rank)
+
+long_album_titles
+```
+
+### Average Rank Based on Word Usage in Album Title
+
+Album titles were tokenized into individual words, their frequency was counted, and the average rank was calculated for words appearing at least 10 times.
+The most common words are generally neutral everyday words.
+
+```{r}
+word_rank <- df %>%
+  separate_rows(album, sep = " ") %>%
+  group_by(album) %>%
+  summarise(appearance_count = n(), avg_rank = round(mean(c(rank_2003, rank_2012, rank_2020), na.rm = TRUE), 2)) %>%
+  filter(appearance_count >= 10) %>%
+  arrange(desc(appearance_count))
+
+word_rank
+```
+
+### Top genres by average Spotify popularity
+
+At first rows where genre is NA were removed and then grouped by genre.
+Afterwards find the average from column spotify_popularity.
+The range is 0 - 100 and the bigger the number, the more popular the album is - so Latin albums are the most popular.
+
+```{r}
+df %>%
+  filter(!is.na(genre)) %>%
+  group_by(genre) %>%
+  summarise(avg_popularity = mean(spotify_popularity, na.rm = TRUE)) %>% 
+  arrange(desc(avg_popularity))
+```
+
+### Number of albums from each genre in each rank
+
+To count the numbers of albums in each rank by genre columns like "rank_2003" were transfered to longer data.
+Name of the column transformed to "rank_year" and values were added to column "rank".
+After that - genres and rank were filtered, grouped by it and summarized.
+
+```{r}
+number_of_albums_from_each_genre_in_each_rank <- df %>%
+    pivot_longer(cols = starts_with("rank_"),
+               names_to = "rank_year",
+               values_to = "rank") %>%
+  filter(!is.na(rank) & !is.na(genre)) %>%
+  group_by(genre, rank_year) %>% 
+  summarise(album_count = n(), .groups = "drop") 
+
+number_of_albums_from_each_genre_in_each_rank
+```
+
+### Top 10 albums that improved the most (positive)
+
+Albums that aren't in 2003 or 2020 rankings were filtered out and arranged by *differential* descending to choose top 10.
+
+```{r}
+top_improved <- df %>%
+  filter(!is.na(rank_2003) & !is.na(rank_2020)) %>%
+  arrange(desc(differential)) %>% 
+  select(clean_name, album, rank_2003, rank_2020, differential) %>%
+  slice_head(n = 10)
+top_improved
+```
+
+### Top 10 albums that dropped the most (negative)
+
+Albums that aren't in 2003 or 2020 rankings were filtered out and arranged by *differential* ascending to choose top 10.
+
+```{r}
+top_dropped <- df %>%
+  filter(!is.na(rank_2003) & !is.na(rank_2020)) %>%
+  arrange(differential) %>%
+  select(clean_name, album, rank_2003, rank_2020, differential) %>%
+  slice_head(n = 10)
+top_dropped
+```
+
+### Percentage of the albums in top charts with special characters in their name
+
+Special characters were defined other than dots and commas, then *grepl* function is used to count how many albums have special characters in their name, divided by the number of distinct names of the albums.
+
+```{r}
+special_characters <- "[!@#$%^&*()_+={}|:;\"<>?/~`\\]"
+
+albums_with_special_chars <- df %>%
+  filter(grepl(special_characters, album)) %>%
+  select(album)
+
+num_special_char_albums <- nrow(albums_with_special_chars)
+
+total_albums <- nrow(df %>% distinct(album))
+
+percentage_special_char_albums <- (num_special_char_albums / total_albums) * 100
+
+num_special_char_albums
+percentage_special_char_albums
+```
+
+### Albums that placed in top 25 in all three years
+
+Albums that were ranked in top 25 in all three rankings are filtered and selected.
+
+```{r}
+df %>%
+  filter(rank_2003 <= 25 & rank_2012 <= 25 & rank_2020 <= 25) %>%
+  select(clean_name, album, genre, rank_2003, rank_2012, rank_2020)
+```
+
+## Plots
+
+### Average age of band members for each genre at the moment of debut
+
+Aaverage age of artists at the moment of debut was calculated and then the data filtered.
+It can be noticed that most genres have a central cluster around 20-30 years, which suggests that most bands release albums in their 20s.
+The results also show that genres like Soul/Gospel/R&B show a wider spread that indicates bands of different ages releasing albums.
+
+```{r}
+rolling_stone <- df %>%
+  mutate(Band.Age = release_year - (artist_birth_year_sum / artist_member_count)) %>%
+  filter(!is.na(Band.Age) & Band.Age > 0 & artist_member_count > 1 & !is.na(genre)) %>% 
+  group_by(genre) %>%
+  filter(n() >= 2)
+
+ggplot(rolling_stone, aes(x = genre, y = Band.Age, fill = genre)) +
+  geom_violin(trim = FALSE, alpha = 0.8) +
+  scale_fill_manual(values = stepped(length(unique(rolling_stone$genre)))) +
+  labs(
+    title = "Band Age Distribution at Album Release by Genre",
+    x = "Genre",
+    y = "Band Age at Album Release"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+```
+
+### Heatmap of number of albums from each genre in each rank
+
+This plot uses previously calculated *number_of_albums_from_each_genre_in_each_rank* and vizualizes it as a heatmap.
+
+```{r}
+selected_colors <- c(stepped(20)[3], stepped(20)[11], stepped(20)[19])
+
+
+ggplot(number_of_albums_from_each_genre_in_each_rank,
+       aes(x = rank_year, y = genre, fill = album_count)) +
+  
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradientn(
+    colors = selected_colors,
+    name = "Album Count",
+    breaks = seq(0, max(number_of_albums_from_each_genre_in_each_rank$album_count) - 10, by = 10)
+  ) +
+  theme_minimal() +
+  labs(title = "Number of Albums in Ranking",
+       x = "Ranking Year",
+       y = "Genre") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size = 14),
+        legend.position = "right")
+```
+
+### Word cloud of the most used words
+
+The names of the albums are selected, tokenized, and deprived of common "stop words. Afterwards, *worldcloud* function is used, which does the vizualization. The most common word is love.
+
+```{r}
+album_words <- df %>%
+  select(album) %>% 
+  tidytext::unnest_tokens(word, album) %>%  
+  anti_join(stop_words, by = "word") %>% 
+  count(word, sort = TRUE)
+
+album_words %>%
+  arrange(desc(n)) %>% print()
+
+selected_colors <- c(stepped(20)[9], stepped(20)[10], stepped(20)[13], stepped(20)[14], stepped(20)[17], stepped(20)[18])
+
+wordcloud(
+  words = album_words$word, 
+  freq = album_words$n, 
+  min.freq = 4,
+  max.words = 50,
+  random.order = FALSE,
+  colors = selected_colors
+)
+```
+
+### Average Age by Genre and Artist Gender in 2003
+
+The data is filtered and the average *birth_year* is calculated and grouped by genre and artist gender.
+For some genres there aren't any female artists or groups that have both female and male members.
+It can be noticed that the age of the female artists is lower in most genres.
+
+```{r}
+average_birthyear_by_genre_gender <- df %>%
+  filter(!is.na(artist_gender) & !is.na(genre)) %>%
+  mutate(birth_year = ifelse(artist_member_count > 1,
+                             artist_birth_year_sum / artist_member_count,
+                             artist_birth_year_sum)) %>% 
+  filter(!is.na(artist_gender) & !is.na(birth_year)) %>% 
+  mutate(age = (2003 - birth_year)) %>%  
+  group_by(genre, artist_gender) %>%
+  summarise(average_birthyear = mean(birth_year, na.rm = TRUE), 
+            average_age = mean(age, na.rm = TRUE),  
+            .groups = "drop")
+
+selected_colors <- c(stepped(20)[3], stepped(20)[15], stepped(20)[11])
+
+ggplot(average_birthyear_by_genre_gender, aes(x = genre, y = average_age, color = artist_gender, group = artist_gender)) +
+  geom_line(linewidth = 1) + 
+  geom_point(size = 4) +
+  labs(title = "Average Age by Genre and Artist Gender in 2003",
+       x = "Genre",
+       y = "Average Age",
+       color = "Artist Gender") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major = element_line(color = "gray80")) +
+  scale_y_continuous(limits = c(20, 80), breaks = seq(20, 80, by = 10)) +
+  scale_color_manual(values = selected_colors)
+```
+
+### Correlation Between Average Birth Year and Rank by Year and Genre
+
+Each artist’s average birth year is computed.
+The code reshapes their chart‑rank data into a long format by year, and then produces a faceted scatterplot showing the relationship between rank and average birth year colored by genre.
+We can see that a lot of artists were born in 1940-1950 years, which makes sense, since there was a "baby boom" after the II World War.
+
+```{r}
+debut_age_rank_data <- df %>%
+  filter(!is.na(artist_gender) & !is.na(genre)) %>%
+  mutate(birth_year = ifelse(artist_member_count > 1,
+                             artist_birth_year_sum / artist_member_count,
+                             artist_birth_year_sum)) %>%
+  pivot_longer(cols = starts_with("rank_"),
+               names_to = "rank_year",
+               values_to = "rank") %>%
+  filter(!is.na(birth_year) & !is.na(rank)) %>% 
+  mutate(rank_year = gsub("rank_", "", rank_year))
+
+plot <- ggplot(debut_age_rank_data, aes(x = rank, y = birth_year)) +
+  geom_point(alpha = 0.7, size = 3, aes(color = genre)) +
+  labs(title = "Correlation Between Average Birth Year and Rank by Year and Genre",
+       x = "Rank",
+       y = "Average Birth Year",
+       color = "Genre") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  facet_wrap(~rank_year, scales = "fixed") + 
+  scale_color_manual(values = stepped(15)) +
+  scale_y_continuous(limits = c(1910, 2000), 
+                     breaks = seq(1910, 2000, by = 10)) +  
+  scale_x_continuous(breaks = seq(0, 500, by = 100)) +
+  theme(strip.text = element_text(size = 12, face = "bold"))
+
+plot
+```
+
+### Spotify Presence by Genre
+
+An additional column *has_spotify* has been created, the data was grouped and summarized.
+
+```{r}
+spotify_analysis <- df %>%
+  filter(!is.na(genre)) %>% 
+  mutate(has_spotify = ifelse(!is.na(spotify_url), "Has Spotify", "No Spotify")) %>%
+  group_by(genre, has_spotify) %>%
+  summarise(album_count = n(), .groups = "drop") %>%
+  mutate(percent = album_count / sum(album_count) * 100, .by = genre)
+
+
+selected_colors <- c(stepped(20)[19], stepped(20)[20])
+plot <- ggplot(spotify_analysis, aes(x = 2, y = percent, fill = has_spotify)) +
+  geom_bar(stat = "identity") +
+  coord_polar(theta = "y") +
+  geom_text(data = spotify_analysis %>% filter(has_spotify == "No Spotify" & percent > 0),
+            aes(label = paste0(round(percent, 1), "%"), y = percent / 2), 
+            size = 4) +
+  facet_wrap(~genre, nrow = 3) +
+  labs(title = "Spotify Presence by Genre", fill = "Spotify Status") +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.text = element_text(size = 10, face = "bold"),
+        plot.title = element_text(hjust = 0.5, size = 14)) +
+  xlim(0.5, 2.5) +
+  scale_fill_manual(values = selected_colors)
+plot
+
+ggsave("larger_graph.jpg", plot = plot, width = 16, height = 10, dpi = 300)
+```
+
+### Average Debut Age of Group vs. Solo Artists Across Genres
+
+New column Solo/Group was added which showed that in Latin the average age for groups is the highest one compared to all the other genres and artist types.
+
+```{r}
+data <- df %>% 
+  filter(!is.na(genre) & !is.na(artist_gender)) %>% 
+  mutate(birth_year = ifelse(artist_member_count > 1,
+                             artist_birth_year_sum / artist_member_count,
+                             artist_birth_year_sum)) %>% 
+  mutate(debut_age = debut_album_release_year - birth_year) %>% 
+  mutate(artist_type = ifelse(artist_member_count > 1, "Group", "Solo")) %>% 
+  group_by(genre, artist_type) %>% 
+  summarise(avg_debut_age = mean(debut_age, na.rm = TRUE), , .groups = "drop") 
+
+selected_colors <- c(stepped(20)[16], stepped(20)[8])
+
+plot <- ggplot(data, aes(x = genre, y = avg_debut_age, group = artist_type, color = artist_type)) +
+  geom_line(linewidth = 1) +  
+  geom_point(size = 3) +  
+  labs(title = "Average Debut Age of Group vs. Solo Artists Across Genres", 
+       x = "Genre", y = "Average Debut Age", color = "Artist Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size = 14),
+        panel.grid.minor = element_blank(), 
+        legend.position = "top") +
+  scale_y_continuous(limits = c(15, 50), 
+                     breaks = seq(15, 50, by = 5)) +
+  scale_color_manual(values = selected_colors)
+
+plot 
+```
+
+### Album Rank Changes Over Time
+
+The data is reshaped and the missing values are filtered out.
+After that, ranks over time are compared.
+An animated plot showing the rank changes for each album, with colors representing the change and shapes showing the genre is displayed it the *Viewer*.
+
+```{r}
+data <- df %>%
+  pivot_longer(cols = starts_with("rank_"),
+               names_to = "rank_year",
+               values_to = "rank") %>% 
+  filter(!is.na(rank) & !is.na(genre)) %>%
+  mutate(rank_year = str_extract(rank_year, "\\d{4}")) %>% 
+  mutate(rank_year = as.integer(rank_year)) %>% 
+  arrange(rank_year, rank)
+
+data <- data %>%
+  group_by(album) %>%
+  arrange(rank_year) %>%
+  mutate(rank_change = rank - lag(rank, default = rank[1])) 
+
+
+plot <- ggplot(data, aes(x = album, y = rank, color = rank_change, shape = genre)) +
+  geom_point(size = 3) +
+  scale_color_gradient2(low = stepped(24)[1], mid = stepped(24)[24], high = stepped(24)[13], midpoint = 0) +
+  scale_shape_manual(values = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)) + 
+  labs(title = "Album Rank Changes Over Time: {frame_time}", 
+       x = "Album", y = "Rank", color = "Rank Change", shape = "Genre") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        plot.title = element_text(hjust = 0.5, size = 14),
+        panel.background = element_blank(),
+        plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        ) +
+  transition_time(rank_year) +  
+  ease_aes('linear')  
+
+animate(plot, fps = 10, duration = 8, width = 900, height = 600, renderer = gifski_renderer())
+```
+
+### Appearance of Emotional Words in Album Titles
+
+Emotional words in album titles were counted and categorized as positive or negative.
+The visualization shows that positive words appear more frequently, with "love" being the most common.
+
+```{r}
+positive_words <- c("Love", "Like", "Happy", "Joy", "Smile", "Dream", "Hope", "Bright", "Peace", "Sweet")
+negative_words <- c("Hate", "Dislike", "Sad", "Cry", "Tears", "Dark", "Pain", "Lonely", "Broken", "Fear")
+
+emotional_words <- c(positive_words, negative_words)
+
+emotion_analysis <- df %>%
+  separate_rows(album, sep = " ") %>%
+  filter(album %in% emotional_words) %>%
+  group_by(album) %>%
+  summarise(appearance_count = n()) %>%
+  arrange(desc(appearance_count))
+
+emotion_analysis <- emotion_analysis %>%
+  mutate(category = ifelse(album %in% positive_words, "Positive", "Negative"))
+
+emotion_summary <- emotion_analysis %>%
+  group_by(category) %>%
+  summarise(total_appearances = sum(appearance_count))
+
+emotion_plot <- ggplot(emotion_analysis, aes(x=reorder(album, -appearance_count), y=appearance_count, fill=category)) +
+  geom_col() +
+  theme_minimal() +
+  scale_fill_manual(values = stepped(24)[c(4, 20)]) +
+  labs(title="Emotional Words in Album Titles", x="Word", y="Count") +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+emotion_plot
+```
+
+### Artist Gender by Birth Decade
+
+An approximated decade of birth was first calculated for each artist, then occurrences were counted and displayed.
+Only in recent years more top female than top male artists were born.
+Also, most artists in the rankings were born in the '40s-'60s range.
+
+```{r}
+rolling_stone <- df %>%
+  mutate(birth_decade = floor(artist_birth_year_sum / artist_member_count / 10) * 10) %>%
+  filter(!is.na(birth_decade))
+
+gender_by_decade <- rolling_stone %>%
+  count(birth_decade, artist_gender) %>%
+  spread(artist_gender, n, fill = 0)
+
+g <- ggplot(gather(gender_by_decade, Gender, Count, -birth_decade), aes(x=birth_decade, y=Count, fill=Gender)) +
+  geom_bar(stat='identity', position='dodge') +
+  theme_minimal() +
+  scale_fill_manual(values = stepped(24)[c(12, 16, 20)]) +
+  scale_x_continuous(breaks = seq(min(1900), max(2000), by = 10)) +
+  labs(title="Artist Gender Distribution by Birth Decade", x="Birth Decade", y="Count")
+g
+```
+
+### Years Between Debut and Top Album in 2020
+
+Average rank was calculated based on years between debut and 2020.
+The plot suggests that artists with shorter careers achieve better rankings.
+
+```{r}
+df <- df %>% 
+  mutate(years_between_top_2020 = release_year - debut_album_release_year,
+         years_range = floor(years_between_top_2020 / 10) * 10,
+         years_range_label = paste0(years_range, "-", years_range + 9)) %>%
+  filter(!is.na(debut_album_release_year))
+
+years_between_top_2020_range <- df %>%
+  select(clean_name, years_between_top_2020, rank_2020, years_range_label) %>%
+  filter(!is.na(rank_2020)) %>%
+  group_by(years_range_label) %>%
+  summarise(avg_rank = round(mean(rank_2020, na.rm = TRUE), 2)) %>%
+  arrange(years_range_label)
+
+ggplot(years_between_top_2020_range, aes(x = years_range_label, y = avg_rank, group = 1, color = years_range_label)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = stepped(24)[c(4, 8, 12, 16, 20, 24)]) +
+  labs(title = "Average Rank vs. Years Between Debut and 2020 Hit",
+       x = "Years Between Debut and 2020 Hit (Range)",
+       y = "Average Rank",
+       color = "Years Range") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Album Ranking Movements Over Time
+
+This bar plot created by calculating average movement of ranks by release decade shows that newer albums tend to achieve higher places easier.
+
+```{r}
+average_movement_by_decade <- df %>% 
+  mutate(release_decade = floor(release_year / 10) * 10) %>%
+  group_by(release_decade) %>%
+  summarise(avg_movement = round(mean(differential, na.rm = TRUE), 2))
+
+ggplot(average_movement_by_decade, aes(x = factor(release_decade), y = avg_movement, fill = factor(release_decade))) +
+  geom_col() +
+  scale_fill_manual(values = stepped(24)[c(1, 4, 9, 12, 13, 16, 17)]) +
+  theme_minimal() +
+  labs(title = "Average Album Ranking Movement Over Time", x = "Release Decade", y = "Average Movement", fill = "Decade") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Average Length of Album Titles by Gender
+
+An animated bar plot shows differences in album title length and rank divided by artist gender.
+The result shows that for male artists the title length has little influence over rank, for female artists shorter titles are better, and for mixed groups - there is only a small difference in length between the top and bottom ranks.
+
+```{r}
+album_length <- df %>% 
+  mutate(word_count = str_count(album, " ") + 1, char_count = nchar(album), rank_group = cut(rank_2020, breaks = seq(0, 500, 100))) %>% 
+  drop_na(rank_2020)
+
+animated_plot <- ggplot(album_length, aes(x = rank_group)) +
+  geom_bar(aes(y = char_count, fill = "Character Count"), stat = "summary", fun = "mean", position = "dodge") +
+  geom_bar(aes(y = word_count, fill = "Word Count"), stat = "summary", fun = "mean", position = "dodge") +
+  scale_fill_manual(values = stepped(2)) +
+  theme_minimal() +
+  labs(title = "Album Title Length by Rank Group - {closest_state}", 
+       x = "Rank Group", 
+       y = "Average Count", 
+       fill = "Legend") +
+  transition_states(artist_gender)
+
+animated_plot
+```
+
+### Relationship Between Debut Album Release Year, Release Year, and Highest Rank
+
+A scatter plot was created to show the relationship between an artist's debut album release year and the number of years it took them to reach their top-ranked album.
+The color gradient represents the highest rank achieved, with blue indicating better ranks and red indicating worse ranks.
+The results suggest that artists debuting earlier generally took longer to reach their highest-ranked album, but there are exceptions across different time periods.
+
+```{r}
+debut_release_rank <- df %>% 
+  mutate(highest_rank = pmin(rank_2003, rank_2012, rank_2020, na.rm = TRUE),
+         year_difference = release_year - debut_album_release_year) %>% 
+  select(debut_album_release_year, release_year, year_difference, highest_rank) %>% 
+  arrange(highest_rank)
+
+ggplot(debut_release_rank, aes(x = debut_album_release_year, y = year_difference, color = highest_rank)) +
+  geom_point(alpha = 0.6) +
+  scale_color_gradientn(colors = stepped(24)[c(17, 13, 9, 1)]) +
+  scale_x_continuous(breaks = seq(min(1930), max(2020), by = 10)) +
+  theme_minimal() +
+  labs(title = "Debut Year vs. Years to Top Album vs. Highest Rank",
+       x = "Debut Album Release Year",
+       y = "Difference in Years",
+       color = "Highest Rank") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+```
+
+### Genres and Billboard Longevity
+
+Singer-Songwriter/Heartland Rock has the highest median value, which tells us that albums in this genre tend to stay on Billboard the longest.
+The opposite of this insight applies to Reggae.
+Also, genres like Indie/Alternative Rock have relatively wider distributions, which indicates variability in how long albums from these genres stay on the Billboard.
+
+```{r}
+df_clean <- df %>% filter(!is.na(weeks_on_billboard) & !is.na(genre))
+
+ggplot(df_clean, aes(x = reorder(genre, weeks_on_billboard, median), y = weeks_on_billboard, fill = genre)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Genres and Billboard Longevity",
+       x = "Genre",
+       y = "Weeks on Billboard") +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = stepped(n_distinct(df_clean$genre)))
+```
+
+### Soloist Age and Billboard Success
+
+The resulting plot shows that artists that reach Billboard are mostly around 20-30 years old.
+It also shows that older men have a higher change of achieving it than older women.
+
+```{r}
+df_solo <- df %>% filter(artist_member_count == 1 & !is.na(artist_gender))
+
+ggplot(df_solo, aes(x = artist_gender, y = ave_age_at_top_500, fill = artist_gender)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Soloist Age and Billboard Success",
+       x = "Artist Gender",
+       y = "Average Age at Top 500") +
+  scale_fill_manual(values = stepped(2)) +
+  theme(legend.position = "none")+
+  scale_y_continuous(breaks = seq(0, max(df_solo$ave_age_at_top_500), by = 10))
+```
+
+### Genre vs. Rank in a Particular Year
+
+A heatmap was created to visualize the rankings of different genres over multiple years.
+Higher rankings (closer to 1) are shown in blue, while lower rankings are in red.
+As can be seen, Reggae and Funk/Disco were present near the top of the ranking for all three lists.
+
+```{r}
+df_long <- df %>% 
+  select(genre, rank_2003, rank_2012, rank_2020) %>% 
+  gather(year, rank, -genre) %>% 
+  mutate(year = as.factor(gsub("rank_", "", year))) %>% 
+  drop_na()
+
+heatmap_plot <- ggplot(df_long, aes(x=year, y=genre, fill=rank)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = stepped(24)[c(20, 16, 12, 8, 4)], trans = "reverse") +
+  theme_minimal() +
+  labs(title="Heatmap of Genres vs. Rank in Particular Years", x="Year", y="Genre", fill="Rank")
+
+heatmap_plot
+```
+
+### Genre Proportions Over Decades
+
+This plot shows how popularity of genres changes by decades based on their appearance in the rankings.
+The results show that in the '70s Big Band/Jazz was most popular, with Hip-Hop/Rap taking its place in the recent decades.
+
+```{r}
+df$release_decade <- floor(df$release_year / 10) * 10
+
+genre_proportion <- df %>% 
+  count(release_decade, genre) %>% 
+  group_by(release_decade) %>% 
+  mutate(proportion = n / sum(n)) %>%
+  filter(!is.na(genre))
+
+proportion_plot <- ggplot(genre_proportion, aes(x=release_decade, y=proportion, color=genre, group=genre)) +
+  geom_line(size=1) +
+  geom_point(size=2) +
+  scale_color_manual(values = stepped(length(unique(genre_proportion$genre)))) +
+  scale_x_continuous(breaks = seq(min(genre_proportion$release_decade), max(genre_proportion$release_decade), by = 10)) +
+  theme_minimal() +
+  labs(title="Genre Proportions Over Decades",
+       x="Release Decade",
+       y="Proportion",
+       color="Genre")
+
+proportion_plot
+```
+
+### Name Length vs. Top Rank vs. Debut Year
+
+This scatter plot examines the relationship between artist name length, debut year, and highest ranking, using color to indicate debut year trends.
+As it can be seen, the average name length varies in the 9-13 character amount range and the longest names mostly belong in the '60s-'80s range.
+
+```{r}
+df <- df %>% 
+  mutate(name_length = nchar(clean_name),
+         highest_rank = pmin(rank_2003, rank_2012, rank_2020, na.rm = TRUE)) %>%
+  drop_na(name_length, highest_rank, debut_album_release_year)
+
+name_length_plot <- ggplot(df, aes(x=name_length, y=highest_rank, color=debut_album_release_year)) +
+  geom_point(alpha=0.6) +
+  scale_color_gradientn(colors = stepped(24)[c(1,5,9,13,17)]) +
+  theme_minimal() +
+  labs(title="Name Length vs. Top Rank vs. Debut Year", x="Name Length", y="Top Rank", color="Debut Year")
+
+name_length_plot
+```
+
+### Top 2 artists per genre based on album rankings
+
+This circular plot based on tidytuesday's Lisa's Garden shows top 2 artists from each genre in a colorful way.
+
+```{r}
+data_clean <- df %>%
+  select(clean_name, genre, rank_2003, rank_2012, rank_2020) %>%
+  pivot_longer(cols = starts_with("rank_"), names_to = "year", values_to = "rank") %>%
+  filter(!is.na(rank)) %>%
+  filter(!is.na(genre)) %>%
+  filter(!is.na(clean_name))
+
+top_artists <- data_clean %>%
+  group_by(genre, clean_name) %>%
+  summarise(best_rank = min(rank, na.rm = TRUE), .groups = "drop") %>%
+  arrange(genre, best_rank) %>%
+  group_by(genre) %>%
+  slice_min(order_by = best_rank, n = 2, with_ties = FALSE)
+
+edges_level0_1 <- top_artists %>%
+  distinct(genre) %>%
+  mutate(from = "Top Artists", to = genre)
+
+edges_level1_2 <- top_artists %>%
+  select(from = genre, to = clean_name)
+
+edge_list <- bind_rows(edges_level0_1, edges_level1_2)
+
+graph <- as_tbl_graph(edge_list, directed = TRUE) %>%
+  activate(nodes) %>%
+  mutate(genre = ifelse(name %in% top_artists$clean_name, 
+                        top_artists$genre[match(name, top_artists$clean_name)], 
+                        name))
+
+color_palette_graph <- stepped(length(unique(top_artists$genre)) + 1)
+
+p <- ggraph(graph, layout = 'dendrogram', circular = FALSE) + 
+  geom_edge_diagonal() +
+  geom_node_point(aes(color = factor(genre)), na.rm = TRUE) +
+    geom_node_text(aes(filter = leaf, label = name), repel = TRUE, na.rm = TRUE) +
+  scale_color_manual(values = color_palette_graph) +
+  theme_void()
+
+node_positions <- ggplot_build(p)$data[[2]]
+
+ggraph(graph, layout = 'dendrogram', circular = TRUE) +
+  geom_edge_diagonal(color = "grey60") +
+  geom_node_point(aes(color = factor(genre)), size = 3, na.rm = TRUE) +
+  geom_node_text(aes(filter = leaf, label = name), size = 3,repel = TRUE, na.rm = TRUE) +
+  scale_color_manual(name = "Genres", values = color_palette_graph) +
+  theme_void() +
+  ggtitle("Top 2 Artists per Genre")
+```
